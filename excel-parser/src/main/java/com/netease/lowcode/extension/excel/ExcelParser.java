@@ -13,10 +13,12 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import java.io.*;
 import java.util.Arrays;
@@ -49,6 +51,80 @@ public class ExcelParser {
      */
     public static <T> ExcelParseResult<T> parseAllSheet(String url, ExcelParseRect rect, Map<String, String> columnFieldMap, Long row, Class<T> clazz) {
         return parseBySheetName(url, null, rect, columnFieldMap, row, clazz);
+    }
+
+    /**
+     * 解析excel,适用于文件上传组件登陆后可访问
+     *
+     * @param url            excel文件地址
+     * @param rect
+     * @param columnFieldMap 列映射:key表示列的索引,value表示映射的字段名称
+     * @param row            表头的行数
+     * @param clazz          映射类
+     * @return
+     * @param <T>
+     */
+    public static <T> ExcelParseResult<T> parseAllSheetWithSecurity(String url, ExcelParseRect rect, Map<String, String> columnFieldMap, Long row, Class<T> clazz) {
+        return parseBySheetNameWithSecurity(url, null, rect, columnFieldMap, row, clazz);
+    }
+
+    public static <T> ExcelParseResult<T> parseBySheetNameWithSecurity(String url, List<String> sheetNames, ExcelParseRect rect,
+                                                                       Map<String, String> columnFieldMap, Long row, Class<T> clazz) {
+        if (StringUtils.isBlank(url)) {
+            ExcelParseResult errResult = new ExcelParseResult();
+            ExcelParseError error = new ExcelParseError();
+            error.setSheetName("");
+            error.setErrorMsg("");
+            error.setErrorMsg("非法的文件下载路径: " + url);
+            errResult.setErrors(Arrays.asList(error));
+            return errResult;
+        }
+
+        HttpServletRequest request = ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes()).getRequest();
+        Cookie[] cookies = request.getCookies();
+
+        String cookie = null;
+        if (ArrayUtils.isNotEmpty(cookies)) {
+            for (int i = 0; i < cookies.length; i++) {
+                if (cookies[i].getName().equals("authorization")) {
+                    cookie = "authorization="+cookies[i].getValue();
+                }
+            }
+        }
+
+        long start = System.currentTimeMillis();
+        if(cookie == null){
+            try (InputStream inputStream = openUrlStreamWithSecurity(url,cookie)) {
+                log.info("download file cost {}ms", System.currentTimeMillis() - start);
+                return parseStreamBySheetName(inputStream, sheetNames, rect, clazz, columnFieldMap, row);
+            } catch (IOException e) {
+                throw new ExcelParseException("下载excel文件发生异常", e);
+            }
+        }else {
+            try (InputStream inputStream = openUrlStream(url)) {
+                log.info("download file cost {}ms", System.currentTimeMillis() - start);
+                return parseStreamBySheetName(inputStream, sheetNames, rect, clazz, columnFieldMap, row);
+            } catch (IOException e) {
+                throw new ExcelParseException("下载excel文件发生异常", e);
+            }
+        }
+
+    }
+
+    private static InputStream openUrlStreamWithSecurity(String url,String cookie) {
+        try {
+            Request request = new Request.Builder().url(getFileUrl(url)).get().addHeader("Cookie",cookie).build();
+
+            Response response = okHttpClient.newCall(request).execute();
+
+            if (!response.isSuccessful()) {
+                throw new ExcelParseException("下载文件发生异常, code: " + response.code() + ", message: " + response.message());
+            }
+
+            return response.body().byteStream();
+        } catch (IOException e) {
+            throw new ExcelParseException("下载文件发生异常", e);
+        }
     }
 
     public static <T> ExcelParseResult<T> parseBySheetName(String url, List<String> sheetNames, ExcelParseRect rect,
